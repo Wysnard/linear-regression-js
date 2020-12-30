@@ -9,8 +9,7 @@ import {
   Scatter,
   ComposedChart,
 } from "recharts";
-import Sketch from "react-p5";
-import p5Types from "p5"; //Import this for typechecking and intellisense
+import * as tf from "@tensorflow/tfjs";
 
 const CHART_WIDTH = 500;
 const CHART_HEIGHT = 500;
@@ -79,18 +78,20 @@ function linearRegression(input: { x: number; y: number }[]) {
   // ];
 }
 
-function gradientLinearRegression(
+function stochasticGradientLinearRegression(
   input: dataType[],
   setRegression: React.Dispatch<React.SetStateAction<dataType[]>>,
-  learning_rate = 0.001,
-  epochs = 10000
+  learning_rate = 0.01,
+  epochs = 1000
 ) {
   const result = R.reduce(
     ({ m, b }, epoch) => {
       console.log(epoch, ":", m, b);
       const result = R.reduce(
         ({ m, b }, { x, y }) => {
+          // Guessing
           const guess = linear(m, b)(x);
+          // Cost function
           const error = y - guess;
           return {
             m: m + error * x * learning_rate,
@@ -107,6 +108,51 @@ function gradientLinearRegression(
   return result;
 }
 
+function tfLinearRegression(
+  input: dataType[],
+  learning_rate = 0.01,
+  epochs = 1000
+) {
+  return tf.tidy(() => {
+    const optimizer = tf.train.sgd(learning_rate);
+    const xs = R.map(({ x }) => x, input);
+    const ys = R.map(({ y }) => y, input);
+    const m = tf.variable(tf.scalar(0));
+    const b = tf.variable(tf.scalar(0));
+
+    function predict(xs: number[]) {
+      const tfxs = tf.tensor1d(xs);
+      // y = mx + b
+      const tfys = tfxs.mul(m).add(b);
+      tfxs.dispose();
+      return tfys;
+    }
+
+    function loss(pred: any, labels: any) {
+      return pred.sub(labels).square().mean();
+    }
+
+    function train() {
+      const tfys = tf.tensor1d(ys);
+      const result = optimizer.minimize(() => loss(predict(xs), tfys), false, [
+        m,
+        b,
+      ]);
+      tfys.dispose();
+      result?.dispose();
+    }
+
+    R.pipe(R.forEach(() => train()))(R.range(0, epochs));
+
+    const result = { m: m.dataSync()[0], b: b.dataSync()[0] };
+    console.log("TF :", result);
+    m.dispose();
+    b.dispose();
+    optimizer.dispose();
+    return result;
+  });
+}
+
 interface ComponentProps {
   //Your component props
 }
@@ -114,7 +160,7 @@ interface ComponentProps {
 const App: React.FC<ComponentProps> = (props: ComponentProps) => {
   const [data, setData] = useState<dataType[]>(startData);
   const [epochs, setEpochs] = useState<number>(1000);
-  const [learning_rate, setLearning] = useState<number>(0.001);
+  const [learning_rate, setLearning] = useState<number>(0.01);
   const [regression, setRegression] = useState<dataType[]>([]);
   return (
     <>
@@ -159,6 +205,7 @@ const App: React.FC<ComponentProps> = (props: ComponentProps) => {
       <button
         onClick={() => {
           console.log(data);
+          console.log("Active tensors :", tf.memory().numTensors);
         }}
       >
         Log
@@ -179,7 +226,7 @@ const App: React.FC<ComponentProps> = (props: ComponentProps) => {
       <button
         onClick={() => {
           if (data.length > 1) {
-            const result = gradientLinearRegression(
+            const result = stochasticGradientLinearRegression(
               data,
               setRegression,
               learning_rate,
@@ -192,7 +239,20 @@ const App: React.FC<ComponentProps> = (props: ComponentProps) => {
           }
         }}
       >
-        Gradient Descent Linear Regression Predict
+        Stochastic Gradient Descent Linear Regression Predict
+      </button>
+      <button
+        onClick={() => {
+          if (data.length > 1) {
+            const result = tfLinearRegression(data, learning_rate, epochs);
+            setRegression([
+              { x: 0, y: result.m * 0 + result.b },
+              { x: DATALENGTH, y: result.m * DATALENGTH + result.b },
+            ]);
+          }
+        }}
+      >
+        TensorFlow Linear Regression Predict
       </button>
     </>
   );
